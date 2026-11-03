@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:svg_editor/main.dart';
+import 'package:svg_editor/svg_utils.dart';
 
 void main() {
   testWidgets('shows editor and preview', (tester) async {
