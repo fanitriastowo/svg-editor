@@ -38,6 +38,55 @@ String prettifySvg(String source) {
   }
 }
 
+final _shapeTag = RegExp(
+  r'<(path|rect|circle|ellipse|line|polyline|polygon)\b[^>]*/>',
+);
+final _viewBox = RegExp(r'''viewBox\s*=\s*["']([^"']*)["']''');
+
+/// Returns [source] with an outlined copy of the shape tag at [offset]
+/// inserted right after it, or [source] unchanged if there is none.
+String highlightShapeAt(String source, int offset) {
+  final match = _shapeTag
+      .allMatches(source)
+      .where((m) => m.start <= offset && offset <= m.end)
+      .firstOrNull;
+  if (match == null) return source;
+
+  final XmlElement copy;
+  try {
+    copy = XmlDocument.parse(match[0]!).rootElement;
+  } on XmlException {
+    return source;
+  }
+  for (final name in const [
+    'fill',
+    'stroke',
+    'stroke-width',
+    'style',
+    'opacity',
+    'fill-opacity',
+    'stroke-opacity',
+    'id',
+    'class',
+  ]) {
+    copy.removeAttribute(name);
+  }
+  // Scale the outline to the drawing so it looks the same at any viewBox size.
+  final box = _viewBox.firstMatch(source)?[1]?.trim().split(RegExp(r'[\s,]+'));
+  final size = box?.length == 4
+      ? [
+          double.tryParse(box![2]) ?? 0,
+          double.tryParse(box[3]) ?? 0,
+        ].reduce((a, b) => a > b ? a : b)
+      : 0.0;
+  copy
+    ..setAttribute('fill', 'none')
+    ..setAttribute('stroke', '#ff2d55')
+    ..setAttribute('stroke-width', size > 0 ? '${size / 100}' : '2');
+
+  return source.replaceRange(match.end, match.end, copy.toXmlString());
+}
+
 /// Text controller that colors SVG/XML syntax.
 class SvgSyntaxController extends TextEditingController {
   SvgSyntaxController({super.text});
@@ -68,7 +117,10 @@ class SvgSyntaxController extends TextEditingController {
       }
       final group = [1, 2, 3, 4, 5].firstWhere((g) => m[g] != null);
       spans.add(
-        TextSpan(text: m[0], style: TextStyle(color: _colors[group - 1])),
+        TextSpan(
+          text: m[0],
+          style: TextStyle(color: _colors[group - 1]),
+        ),
       );
       last = m.end;
     }
@@ -141,6 +193,25 @@ class _EditorPageState extends State<EditorPage> {
     setState(() => _path = path);
   }
 
+  /// Cuts the selection, or the whole line under the cursor if nothing is selected.
+  void _cut() {
+    final text = _controller.text;
+    final selection = _controller.selection;
+    if (!selection.isValid) return;
+    var start = selection.start;
+    var end = selection.end;
+    if (selection.isCollapsed) {
+      start = start == 0 ? 0 : text.lastIndexOf('\n', start - 1) + 1;
+      final newline = text.indexOf('\n', end);
+      end = newline == -1 ? text.length : newline + 1;
+    }
+    Clipboard.setData(ClipboardData(text: text.substring(start, end)));
+    _controller.value = TextEditingValue(
+      text: text.replaceRange(start, end, ''),
+      selection: TextSelection.collapsed(offset: start),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final fileName = _path?.split(Platform.pathSeparator).last ?? 'Untitled';
@@ -148,6 +219,7 @@ class _EditorPageState extends State<EditorPage> {
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyO, meta: true): _open,
         const SingleActivator(LogicalKeyboardKey.keyS, meta: true): _save,
+        const SingleActivator(LogicalKeyboardKey.keyX, meta: true): _cut,
       },
       child: Scaffold(
         appBar: AppBar(
@@ -185,10 +257,7 @@ class _EditorPageState extends State<EditorPage> {
                       expands: true,
                       maxLines: null,
                       textAlignVertical: TextAlignVertical.top,
-                      style: const TextStyle(
-                        fontFamily: 'Menlo',
-                        fontSize: 13,
-                      ),
+                      style: const TextStyle(fontFamily: 'Menlo', fontSize: 13),
                       decoration: const InputDecoration(
                         border: InputBorder.none,
                         contentPadding: EdgeInsets.all(12),
@@ -217,7 +286,10 @@ class _EditorPageState extends State<EditorPage> {
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: SvgPicture.string(
-                        _controller.text,
+                        highlightShapeAt(
+                          _controller.text,
+                          _controller.selection.baseOffset,
+                        ),
                         errorBuilder: (context, error, stackTrace) =>
                             const Center(child: Text('Invalid SVG')),
                       ),
